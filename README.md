@@ -29,9 +29,6 @@ This system demonstrates enterprise-grade architecture with **event-driven desig
 
 ## Quick Start Guide
 
-### Prerequisites
-- Docker and Docker Compose
-- Git
 
 ### Local Development Setup
 
@@ -41,10 +38,7 @@ git clone <repository-url>
 cd billing-backend
 
 # 2. Using Docker Compose
-docker-compose up --build
-            OR
-# 2. Start the entire system (one command!)
-./scripts/env-manager.sh -e development start
+docker compose -f docker-compose.testing.yml up --build 
 
 # 3. Verify services are running
 docker-compose ps
@@ -55,6 +49,8 @@ docker-compose ps
 # Flower (Queue Monitor): http://localhost:5555
 ```
 
+Please note that the seed data for this env is placed at [scripts/init-db-testing.sql](billing-backend/scripts/init-db-testing.sql)
+
 ### Service Endpoints
 - **Subscription Service**: `http://localhost:8001` (Swagger: `/docs`)
 - **Payment Service**: `http://localhost:8002` (Swagger: `/docs`)
@@ -62,20 +58,7 @@ docker-compose ps
 - **Redis**: `localhost:6379`
 - **Flower Dashboard**: `http://localhost:5555`
 
-### Environment Management
-```bash
-# Development environment
-./scripts/env-manager.sh -e development start
-
-# Staging environment
-./scripts/env-manager.sh -e staging deploy
-
-# View logs
-./scripts/env-manager.sh -e development logs
-
-# Stop services
-./scripts/env-manager.sh -e development stop
-```
+![swagger](billing-backend/docs/images/swagger.png)
 
 ---
 
@@ -208,6 +191,83 @@ classDiagram
 - Webhook Delivery Client (HMAC-secured notifications)
 - Subscription Service Client (inter-service communication)
 
+```mermaid
+graph TB
+    subgraph "Payment Service (Port 8002)"
+        subgraph "API Layer"
+            PayAPI[Payment Endpoints<br/>/v1/payments/*]
+            PayHealthAPI[Health Endpoints<br/>/v1/health/*]
+        end
+        
+        subgraph "Middleware"
+            PayAuthMW[JWT Authentication]
+            PayCORS[CORS Middleware]
+            PayErrorMW[Error Handler]
+        end
+        
+        subgraph "Service Layer"
+            PaySvc[PaymentService]
+            PayWebhookSvc[WebhookService]
+            PayHealthSvc[HealthService]
+        end
+        
+        subgraph "Integration Layer"
+            MockGateway[Mock Gateway Client]
+            WebhookClient[Webhook Delivery Client]
+            SubServiceClient[Subscription Service Client]
+        end
+        
+        subgraph "Repository Layer"
+            TransRepo[TransactionRepository]
+            OutboundRepo[WebhookOutboundRepository]
+        end
+        
+        subgraph "Core Infrastructure"
+            PayDB[Database Client]
+            PayRedis[Redis Client]
+            PayLogger[Logging System]
+        end
+    end
+    
+    %% API to Middleware
+    PayAPI --> PayAuthMW
+    PayHealthAPI --> PayErrorMW
+    
+    %% Middleware to Services
+    PayAuthMW --> PaySvc
+    PayErrorMW --> PayHealthSvc
+    
+    %% Services to Integration
+    PaySvc --> MockGateway
+    PaySvc --> WebhookClient
+    PayWebhookSvc --> SubServiceClient
+    
+    %% Services to Repositories
+    PaySvc --> TransRepo
+    PayWebhookSvc --> OutboundRepo
+    
+    %% Repositories to Infrastructure
+    TransRepo --> PayDB
+    OutboundRepo --> PayDB
+    PaySvc --> PayRedis
+    PayWebhookSvc --> PayRedis
+    
+    %% Grey-only class styling with white text
+    classDef api fill:#5f6368,stroke:#37393b,stroke-width:2px,color:#ffffff;
+    classDef middleware fill:#6f7377,stroke:#404244,stroke-width:2px,color:#ffffff;
+    classDef service fill:#808486,stroke:#4a4c4e,stroke-width:2px,color:#ffffff;
+    classDef integration fill:#919599,stroke:#585a5c,stroke-width:2px,color:#ffffff;
+    classDef repo fill:#a2a5a8,stroke:#6a6c6e,stroke-width:2px,color:#ffffff;
+    classDef infra fill:#b3b6b9,stroke:#7b7d7f,stroke-width:2px,color:#ffffff;
+    
+    class PayAPI,PayHealthAPI api
+    class PayAuthMW,PayCORS,PayErrorMW middleware
+    class PaySvc,PayWebhookSvc,PayHealthSvc service
+    class MockGateway,WebhookClient,SubServiceClient integration
+    class TransRepo,OutboundRepo repo
+    class PayDB,PayRedis,PayLogger infra
+```
+
 ---
 
 ## Database Design
@@ -218,58 +278,116 @@ The system uses a normalized PostgreSQL schema with proper foreign key relations
 
 ```mermaid
 erDiagram
-    USERS ||--o{ SUBSCRIPTIONS : has
-    PLANS ||--o{ SUBSCRIPTIONS : defines
-    SUBSCRIPTIONS ||--o{ SUBSCRIPTION_EVENTS : logs
-    SUBSCRIPTIONS ||--o{ TRANSACTIONS : pays_for
-    TRANSACTIONS ||--|| GATEWAY_WEBHOOK_REQUESTS : receives
-    TRANSACTIONS ||--o{ WEBHOOK_OUTBOUND_REQUESTS : emits
-    USERS ||--o{ USER_USAGE : tracks
+    Users ||--o{ Subscriptions : has
+    Users ||--o{ UserUsage : tracks
+    Plans ||--o{ Subscriptions : defines
+    Subscriptions ||--o{ SubscriptionEvents : logs
+    Subscriptions ||--o{ Transactions : pays_for
+    Transactions ||--o{ GatewayWebhookRequests : triggers
+    Transactions ||--o{ WebhookOutboundRequests : notifies
+    PaymentWebhookRequests ||--o{ Subscriptions : updates
 
-    USERS {
+    Users {
         int id PK
-        varchar email UNIQUE
-        varchar password_hash
-        varchar first_name
-        varchar last_name
-        timestamptz created_at
-        timestamptz updated_at
+        string email UK
+        string password_hash
+        string first_name
+        string last_name
+        timestamp created_at
+        timestamp updated_at
     }
-
-    PLANS {
-        int id PK
-        varchar name
+    
+    Plans {
+        uuid id PK
+        string name
+        string billing_cycle
         decimal price
-        varchar currency
-        varchar billing_cycle
+        string currency
         jsonb features
         boolean is_active
+        boolean is_trial_plan
         int trial_period_days
+        timestamp created_at
+        timestamp updated_at
     }
-
-    SUBSCRIPTIONS {
+    
+    Subscriptions {
         uuid id PK
         int user_id FK
-        int plan_id FK
-        varchar status
-        timestamptz start_date
-        timestamptz end_date
-        timestamptz canceled_at
+        uuid plan_id FK
+        string status
+        timestamp start_date
+        timestamp end_date
+        timestamp canceled_at
+        timestamp created_at
+        timestamp updated_at
     }
-
-    TRANSACTIONS {
+    
+    SubscriptionEvents {
+        int id PK
+        uuid subscription_id FK
+        string event_type
+        jsonb event_metadata
+        timestamp created_at
+    }
+    
+    UserUsage {
+        int id PK
+        int user_id FK
+        string feature_name
+        int usage_count
+        timestamp reset_at
+        timestamp created_at
+        timestamp updated_at
+    }
+    
+    Transactions {
         uuid id PK
         uuid subscription_id FK
         decimal amount
-        varchar currency
-        varchar status
-        varchar gateway_reference
+        string currency
+        string status
+        string gateway_reference
+        string error_message
         jsonb metadata
+        timestamp created_at
+        timestamp updated_at
+    }
+    
+    PaymentWebhookRequests {
+        int id PK
+        string event_id UK
+        jsonb payload
+        boolean processed
+        timestamp processed_at
+        timestamp created_at
+        timestamp updated_at
+    }
+    
+    GatewayWebhookRequests {
+        int id PK
+        uuid transaction_id UK
+        jsonb payload
+        boolean processed
+        timestamp processed_at
+        timestamp created_at
+        timestamp updated_at
+    }
+    
+    WebhookOutboundRequests {
+        int id PK
+        string target_url
+        jsonb payload
+        string status
+        int retry_count
+        timestamp last_attempt_at
+        timestamp created_at
+        timestamp updated_at
     }
 ```
 ---
 
-## 🌐 API Design & Endpoints
+## API Design & Endpoints
 
 ### RESTful Design Principles
 
@@ -623,48 +741,6 @@ def verify_webhook_signature(request):
 
 ---
 
-## Configuration Management
-
-### Modern Configuration System
-
-The system implements **12-Factor App principles** with environment-specific configuration management.
-
-### Configuration Structure
-
-```
-config/
-├── environments/
-│   ├── base.env              # Shared configuration
-│   ├── development.env       # Development settings
-│   ├── staging.env          # Staging settings
-│   └── production.env       # Production settings
-├── config_loader.py         # Centralized loader
-└── README.md               # Documentation
-```
-
-### Environment Separation
-
-**Development**:
-- Local services (localhost URLs)
-- Included secrets for convenience
-- Debug mode enabled
-- Hot reloading
-
-**Staging**:
-- Internal service URLs
-- Environment variable substitution
-- Production-like settings
-- Limited debug information
-
-### Configuration Features
-
-1. **Hierarchical Loading**: Base + environment-specific overrides
-2. **Type Validation**: Pydantic-based configuration validation
-3. **Secret Management**: Environment variable substitution for secrets
-4. **Environment Verification**: Prevents configuration mixing
-
----
-
 ## Testing Strategy
 
 ### Testing Pyramid
@@ -711,21 +787,11 @@ The system uses **multi-stage Docker builds** for optimized container images wit
 | flower                 | Queue monitoring dashboard     | HTTP interface         |
 
 
-### Environment Management Script
-
-```bash
-# Single script for all environment operations
-./scripts/env-manager.sh -e [environment] [action]
-
-# Examples:
-./scripts/env-manager.sh -e development start
-./scripts/env-manager.sh -e staging deploy
-./scripts/env-manager.sh -e production validate
-```
-
 ---
 
 ## Monitoring & Health Checks
+
+![flower](billing-backend/docs/images/flower.png)
 
 ### Health Check System
 
@@ -777,6 +843,3 @@ The system uses **multi-stage Docker builds** for optimized container images wit
 
 ---
 
-
-
-This billing backend system represents a **enterprise-grade solution** that demonstrates modern software architecture patterns, security best practices, and operational excellence. The system is designed for scalability, maintainability, and developer productivity while ensuring robust transaction processing and data integrity. 
