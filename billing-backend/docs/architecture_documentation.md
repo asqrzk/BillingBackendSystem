@@ -368,6 +368,20 @@ erDiagram
         timestamp created_at
         timestamp updated_at
     }
+
+    %% Black-and-white styling
+    %% Table boxes - white background, black border, black text
+    %% Relationships - black lines
+    %% Mermaid ERD currently doesn't allow per-table styling, so global style is used
+    style Users fill:#ffffff,stroke:#000000,stroke-width:2px,color:#000000;
+    style Plans fill:#ffffff,stroke:#000000,stroke-width:2px,color:#000000;
+    style Subscriptions fill:#ffffff,stroke:#000000,stroke-width:2px,color:#000000;
+    style SubscriptionEvents fill:#ffffff,stroke:#000000,stroke-width:2px,color:#000000;
+    style UserUsage fill:#ffffff,stroke:#000000,stroke-width:2px,color:#000000;
+    style Transactions fill:#ffffff,stroke:#000000,stroke-width:2px,color:#000000;
+    style PaymentWebhookRequests fill:#ffffff,stroke:#000000,stroke-width:2px,color:#000000;
+    style GatewayWebhookRequests fill:#ffffff,stroke:#000000,stroke-width:2px,color:#000000;
+    style WebhookOutboundRequests fill:#ffffff,stroke:#000000,stroke-width:2px,color:#000000;
 ```
 
 ### Data Flow Architecture
