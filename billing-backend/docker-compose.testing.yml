@@ -1,0 +1,352 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database for Testing
+  postgres-test:
+    image: postgres:15-alpine
+    container_name: billing-postgres-test
+    environment:
+      - POSTGRES_DB=billing_test_db
+      - POSTGRES_USER=billing_user
+      - POSTGRES_PASSWORD=billing_pass
+      - POSTGRES_INITDB_ARGS=--encoding=UTF-8 --lc-collate=C --lc-ctype=C
+    ports:
+      - "5433:5432"  # Different port to avoid conflicts
+    volumes:
+      - postgres_test_data:/var/lib/postgresql/data
+      - ./scripts/init-db-testing.sql:/docker-entrypoint-initdb.d/init-db.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U billing_user -d billing_test_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - billing-test-network
+
+  # Redis for Testing
+  redis-test:
+    image: redis:7-alpine
+    container_name: billing-redis-test
+    ports:
+      - "6380:6379"  # Different port to avoid conflicts
+    volumes:
+      - redis_test_data:/data
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - billing-test-network
+
+  # Subscription Service for Testing
+  subscription-service-test:
+    build:
+      context: ./subscription-service
+      dockerfile: Dockerfile
+    container_name: billing-subscription-test
+    environment:
+      # Load testing environment configuration
+      - ENVIRONMENT=testing
+      - DATABASE_URL=postgresql://billing_user:billing_pass@postgres-test:5432/billing_test_db
+      - REDIS_URL=redis://redis-test:6379/1
+      - PAYMENT_SERVICE_URL=http://payment-service-test:8000
+      # Webhook HMAC config
+      - WEBHOOK_SIGNING_SECRET=testing-webhook-secret-32-chars-minimum-123456
+      - WEBHOOK_TOLERANCE_SECONDS=60
+      
+      # Fast renewal settings for testing
+      - TRIAL_PERIOD_MINUTES=2
+      - MONTHLY_BILLING_MINUTES=5
+      - YEARLY_BILLING_MINUTES=10
+      - RENEWAL_CHECK_INTERVAL_SECONDS=30
+      - PAYMENT_RETRY_DELAY_SECONDS=60
+      - USAGE_RESET_INTERVAL_MINUTES=3
+      
+      # JWT Configuration
+      - JWT_SECRET_KEY=test_jwt_secret_key_32_characters_long_minimum_for_security
+      - JWT_ALGORITHM=HS256
+      - JWT_ACCESS_TOKEN_EXPIRE_MINUTES=1440
+      
+      # Debug settings
+      - DEBUG=true
+      - LOG_LEVEL=DEBUG
+      - ENABLE_DEBUG_ENDPOINTS=true
+      - CREATE_TEST_USERS=true
+      - SEED_TEST_DATA=true
+    ports:
+      - "8001:8000"
+    depends_on:
+      postgres-test:
+        condition: service_healthy
+      redis-test:
+        condition: service_healthy
+    volumes:
+      - ./subscription-service:/app
+      - ./config:/app/config
+    networks:
+      - billing-test-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/v1/health/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Payment Service for Testing
+  payment-service-test:
+    build:
+      context: ./payment-service
+      dockerfile: Dockerfile
+    container_name: billing-payment-test
+    environment:
+      # Load testing environment configuration
+      - ENVIRONMENT=testing
+      - DATABASE_URL=postgresql://billing_user:billing_pass@postgres-test:5432/billing_test_db
+      - REDIS_URL=redis://redis-test:6379/1
+      - SUBSCRIPTION_SERVICE_URL=http://subscription-service-test:8000
+      
+      # Payment Gateway Configuration for Testing
+      - PAYMENT_GATEWAY_SUCCESS_CARD=4242424242424242
+      - PAYMENT_GATEWAY_FAIL_CARD=4000000000000002
+      - GATEWAY_SUCCESS_RATE=0.8
+      - GATEWAY_MIN_DELAY_MS=100
+      - GATEWAY_MAX_DELAY_MS=500
+      - ENABLE_MOCK_PAYMENT_GATEWAY=true
+      
+      # Webhook Configuration
+      - WEBHOOK_SIGNING_SECRET=testing-webhook-secret-32-chars-minimum-123456
+      - WEBHOOK_TOLERANCE_SECONDS=60
+      - WEBHOOK_TIMEOUT_SECONDS=10
+      - WEBHOOK_RETRY_MULTIPLIER=1.5
+      - WEBHOOK_MAX_RETRY_DELAY=300
+      - SKIP_WEBHOOK_SIGNATURE_VALIDATION=true
+      
+      # JWT Configuration (same as subscription service)
+      - JWT_SECRET_KEY=test_jwt_secret_key_32_characters_long_minimum_for_security
+      - JWT_ALGORITHM=HS256
+      
+      # Debug settings
+      - DEBUG=true
+      - LOG_LEVEL=DEBUG
+      - ENABLE_DEBUG_ENDPOINTS=true
+    ports:
+      - "8002:8000"
+    depends_on:
+      postgres-test:
+        condition: service_healthy
+      redis-test:
+        condition: service_healthy
+      subscription-service-test:
+        condition: service_healthy
+    volumes:
+      - ./payment-service:/app
+      - ./config:/app/config
+    networks:
+      - billing-test-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/v1/health/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Celery Worker for Testing (Subscription Service)
+  subscription-worker-test:
+    build:
+      context: ./subscription-service
+      dockerfile: Dockerfile
+    container_name: billing-subscription-worker-test
+    command: celery -A app.workers.celery_app worker -E --loglevel=debug --concurrency=2 --queues=celery,subscription_tasks,usage_tasks,webhook_tasks,queue_tasks
+    environment:
+      # Same environment as subscription service
+      - ENVIRONMENT=testing
+      - DATABASE_URL=postgresql://billing_user:billing_pass@postgres-test:5432/billing_test_db
+      - REDIS_URL=redis://redis-test:6379/1
+      - PAYMENT_SERVICE_URL=http://payment-service-test:8000
+      - WEBHOOK_SIGNING_SECRET=testing-webhook-secret-32-chars-minimum-123456
+      - WEBHOOK_TOLERANCE_SECONDS=60
+      - TRIAL_PERIOD_MINUTES=2
+      - MONTHLY_BILLING_MINUTES=5
+      - YEARLY_BILLING_MINUTES=10
+      - RENEWAL_CHECK_INTERVAL_SECONDS=30
+      - PAYMENT_RETRY_DELAY_SECONDS=60
+      - JWT_SECRET_KEY=test_jwt_secret_key_32_characters_long_minimum_for_security
+      - DEBUG=true
+      - LOG_LEVEL=DEBUG
+    depends_on:
+      postgres-test:
+        condition: service_healthy
+      redis-test:
+        condition: service_healthy
+    volumes:
+      - ./subscription-service:/app
+      - ./config:/app/config
+    networks:
+      - billing-test-network
+
+  # Celery Beat Scheduler for Testing (Fast renewal checks)
+  subscription-scheduler-test:
+    build:
+      context: ./subscription-service
+      dockerfile: Dockerfile
+    container_name: billing-subscription-scheduler-test
+    command: ["celery", "-A", "app.workers.celery_app", "beat", "--loglevel=debug"]
+    environment:
+      # Same environment as subscription service
+      - ENVIRONMENT=testing
+      - DATABASE_URL=postgresql://billing_user:billing_pass@postgres-test:5432/billing_test_db
+      - REDIS_URL=redis://redis-test:6379/1
+      - PAYMENT_SERVICE_URL=http://payment-service-test:8000
+      - WEBHOOK_SIGNING_SECRET=testing-webhook-secret-32-chars-minimum-123456
+      - WEBHOOK_TOLERANCE_SECONDS=60
+      - TRIAL_PERIOD_MINUTES=2
+      - MONTHLY_BILLING_MINUTES=5
+      - YEARLY_BILLING_MINUTES=10
+      - RENEWAL_CHECK_INTERVAL_SECONDS=30
+      - PAYMENT_RETRY_DELAY_SECONDS=60
+      - JWT_SECRET_KEY=test_jwt_secret_key_32_characters_long_minimum_for_security
+      - DEBUG=true
+      - LOG_LEVEL=DEBUG
+    depends_on:
+      postgres-test:
+        condition: service_healthy
+      redis-test:
+        condition: service_healthy
+    volumes:
+      - ./subscription-service:/app
+      - ./config:/app/config
+    networks:
+      - billing-test-network
+
+  # Flower dashboard for Celery (monitor workers/queues)
+  flower-test:
+    image: mher/flower:latest
+    container_name: billing-flower-test
+    environment:
+      - FLOWER_PORT=5555
+      - FLOWER_BROKER_URL=redis://redis-test:6379/1
+      - REDIS_URL=redis://redis-test:6379/1
+    ports:
+      - "5555:5555"
+    depends_on:
+      redis-test:
+        condition: service_healthy
+      subscription-worker-test:
+        condition: service_started
+      subscription-scheduler-test:
+        condition: service_started
+      payment-worker-test:
+        condition: service_started
+    networks:
+      - billing-test-network
+    command: ["celery", "--broker=redis://redis-test:6379/1", "flower", "--port=5555"]
+
+  # Test Data Seeder (runs once to populate test data)
+  test-data-seeder:
+    build:
+      context: ./subscription-service
+      dockerfile: Dockerfile
+    container_name: billing-test-seeder
+    command: ["python", "-m", "scripts.seed_test_data"]
+    environment:
+      - ENVIRONMENT=testing
+      - DATABASE_URL=postgresql://billing_user:billing_pass@postgres-test:5432/billing_test_db
+      - REDIS_URL=redis://redis-test:6379/1
+      - CREATE_TEST_USERS=true
+      - CREATE_TEST_PLANS=true
+      - SEED_TEST_DATA=true
+      - DEBUG=true
+    depends_on:
+      postgres-test:
+        condition: service_healthy
+      subscription-service-test:
+        condition: service_healthy
+    volumes:
+      - ./subscription-service:/app
+      - ./config:/app/config
+    networks:
+      - billing-test-network
+    restart: "no"  # Only run once
+
+  # Payment Worker for Testing
+  payment-worker-test:
+    build:
+      context: ./payment-service
+      dockerfile: Dockerfile
+    container_name: billing-payment-worker-test
+    command: celery -A app.workers.celery_app worker -E --loglevel=debug --concurrency=1 --queues=payment_tasks --pool=solo
+    environment:
+      # Same environment as payment service
+      - ENVIRONMENT=testing
+      - DATABASE_URL=postgresql://billing_user:billing_pass@postgres-test:5432/billing_test_db
+      - REDIS_URL=redis://redis-test:6379/1
+      - SUBSCRIPTION_SERVICE_URL=http://subscription-service-test:8000
+      - WEBHOOK_SIGNING_SECRET=testing-webhook-secret-32-chars-minimum-123456
+      - PAYMENT_GATEWAY_SUCCESS_CARD=4242424242424242
+      - PAYMENT_GATEWAY_FAIL_CARD=4000000000000002
+      - GATEWAY_SUCCESS_RATE=0.8
+      - GATEWAY_MIN_DELAY_MS=100
+      - GATEWAY_MAX_DELAY_MS=500
+      - ENABLE_MOCK_PAYMENT_GATEWAY=true
+      - JWT_SECRET_KEY=test_jwt_secret_key_32_characters_long_minimum_for_security
+      - DEBUG=true
+      - LOG_LEVEL=DEBUG
+    depends_on:
+      postgres-test:
+        condition: service_healthy
+      redis-test:
+        condition: service_healthy
+    volumes:
+      - ./payment-service:/app
+      - ./config:/app/config
+    networks:
+      - billing-test-network
+
+  # Payment Scheduler for Testing (Webhook processing)
+  payment-scheduler-test:
+    build:
+      context: ./payment-service
+      dockerfile: Dockerfile
+    container_name: billing-payment-scheduler-test
+    command: celery -A app.workers.celery_app beat --loglevel=debug
+    environment:
+      # Same environment as payment service
+      - ENVIRONMENT=testing
+      - DATABASE_URL=postgresql://billing_user:billing_pass@postgres-test:5432/billing_test_db
+      - REDIS_URL=redis://redis-test:6379/1
+      - SUBSCRIPTION_SERVICE_URL=http://subscription-service-test:8000
+      - WEBHOOK_SIGNING_SECRET=testing-webhook-secret-32-chars-minimum-123456
+      - PAYMENT_GATEWAY_SUCCESS_CARD=4242424242424242
+      - PAYMENT_GATEWAY_FAIL_CARD=4000000000000002
+      - GATEWAY_SUCCESS_RATE=0.8
+      - GATEWAY_MIN_DELAY_MS=100
+      - GATEWAY_MAX_DELAY_MS=500
+      - ENABLE_MOCK_PAYMENT_GATEWAY=true
+      - JWT_SECRET_KEY=test_jwt_secret_key_32_characters_long_minimum_for_security
+      - DEBUG=true
+      - LOG_LEVEL=DEBUG
+    depends_on:
+      postgres-test:
+        condition: service_healthy
+      redis-test:
+        condition: service_healthy
+    volumes:
+      - ./payment-service:/app
+      - ./config:/app/config
+    networks:
+      - billing-test-network
+
+volumes:
+  postgres_test_data:
+    driver: local
+  redis_test_data:
+    driver: local
+
+networks:
+  billing-test-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.25.0.0/16 

@@ -1,0 +1,198 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: billing_db
+      POSTGRES_USER: billing_user
+      POSTGRES_PASSWORD: billing_pass
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U billing_user -d billing_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  subscription-service:
+    build:
+      context: ./subscription-service
+      dockerfile: Dockerfile
+    ports:
+      - "8001:8000"
+    environment:
+      - DATABASE_URL=postgresql://billing_user:billing_pass@postgres:5432/billing_db
+      - REDIS_URL=redis://redis:6379/0
+      - PAYMENT_SERVICE_URL=http://payment-service:8000
+      - ENVIRONMENT=development
+      # Security Configuration
+      - JWT_SECRET_KEY=dev-jwt-secret-key-change-in-production-32-chars-minimum
+      - JWT_ALGORITHM=HS256
+      - JWT_ACCESS_TOKEN_EXPIRE_MINUTES=60
+      - WEBHOOK_SIGNING_SECRET=dev-webhook-secret-change-in-production-32-chars-minimum
+      - WEBHOOK_TOLERANCE_SECONDS=300
+      - SECRET_KEY=dev-general-secret-change-in-production
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./subscription-service:/app
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  subscription-worker:
+    build:
+      context: ./subscription-service
+      dockerfile: Dockerfile
+    environment:
+      - DATABASE_URL=postgresql://billing_user:billing_pass@postgres:5432/billing_db
+      - REDIS_URL=redis://redis:6379/0
+      - PAYMENT_SERVICE_URL=http://payment-service:8000
+      - ENVIRONMENT=development
+      # Security Configuration (must match subscription-service)
+      - JWT_SECRET_KEY=dev-jwt-secret-key-change-in-production-32-chars-minimum
+      - JWT_ALGORITHM=HS256
+      - JWT_ACCESS_TOKEN_EXPIRE_MINUTES=60
+      - WEBHOOK_SIGNING_SECRET=dev-webhook-secret-change-in-production-32-chars-minimum
+      - WEBHOOK_TOLERANCE_SECONDS=300
+      - SECRET_KEY=dev-general-secret-change-in-production
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./subscription-service:/app
+    command: celery -A app.workers.celery_app worker --loglevel=info --queues=subscription_tasks,usage_tasks,webhook_tasks,queue_tasks
+
+  subscription-beat:
+    build:
+      context: ./subscription-service
+      dockerfile: Dockerfile
+    environment:
+      - DATABASE_URL=postgresql://billing_user:billing_pass@postgres:5432/billing_db
+      - REDIS_URL=redis://redis:6379/0
+      - PAYMENT_SERVICE_URL=http://payment-service:8000
+      - ENVIRONMENT=development
+      # Security Configuration (must match subscription-service)
+      - JWT_SECRET_KEY=dev-jwt-secret-key-change-in-production-32-chars-minimum
+      - JWT_ALGORITHM=HS256
+      - JWT_ACCESS_TOKEN_EXPIRE_MINUTES=60
+      - WEBHOOK_SIGNING_SECRET=dev-webhook-secret-change-in-production-32-chars-minimum
+      - WEBHOOK_TOLERANCE_SECONDS=300
+      - SECRET_KEY=dev-general-secret-change-in-production
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./subscription-service:/app
+    command: celery -A app.workers.celery_app beat --loglevel=info
+
+  payment-service:
+    build:
+      context: ./payment-service
+      dockerfile: Dockerfile
+    ports:
+      - "8002:8000"
+    environment:
+      - DATABASE_URL=postgresql://billing_user:billing_pass@postgres:5432/billing_db
+      - REDIS_URL=redis://redis:6379/0
+      - SUBSCRIPTION_SERVICE_URL=http://subscription-service:8000
+      - PAYMENT_GATEWAY_SUCCESS_CARD=4242424242424242
+      - ENVIRONMENT=development
+      # Security Configuration (must match subscription-service)
+      - JWT_SECRET_KEY=dev-jwt-secret-key-change-in-production-32-chars-minimum
+      - JWT_ALGORITHM=HS256
+      - JWT_ACCESS_TOKEN_EXPIRE_MINUTES=60
+      - WEBHOOK_SIGNING_SECRET=dev-webhook-secret-change-in-production-32-chars-minimum
+      - WEBHOOK_TOLERANCE_SECONDS=300
+      - SECRET_KEY=dev-payment-secret-change-in-production
+      # Gateway Configuration
+      - GATEWAY_SUCCESS_RATE=0.85
+      - GATEWAY_MIN_DELAY_MS=500
+      - GATEWAY_MAX_DELAY_MS=3000
+      - WEBHOOK_TIMEOUT_SECONDS=30
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./payment-service:/app
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  payment-worker:
+    build:
+      context: ./payment-service
+      dockerfile: Dockerfile
+    environment:
+      - DATABASE_URL=postgresql://billing_user:billing_pass@postgres:5432/billing_db
+      - REDIS_URL=redis://redis:6379/0
+      - SUBSCRIPTION_SERVICE_URL=http://subscription-service:8000
+      - PAYMENT_GATEWAY_SUCCESS_CARD=4242424242424242
+      - ENVIRONMENT=development
+      # Security Configuration (must match payment-service)
+      - JWT_SECRET_KEY=dev-jwt-secret-key-change-in-production-32-chars-minimum
+      - JWT_ALGORITHM=HS256
+      - JWT_ACCESS_TOKEN_EXPIRE_MINUTES=60
+      - WEBHOOK_SIGNING_SECRET=dev-webhook-secret-change-in-production-32-chars-minimum
+      - WEBHOOK_TOLERANCE_SECONDS=300
+      - SECRET_KEY=dev-payment-secret-change-in-production
+      # Gateway Configuration
+      - GATEWAY_SUCCESS_RATE=0.85
+      - GATEWAY_MIN_DELAY_MS=500
+      - GATEWAY_MAX_DELAY_MS=3000
+      - WEBHOOK_TIMEOUT_SECONDS=30
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./payment-service:/app
+    command: celery -A app.workers.celery_app worker --loglevel=info --queues=payment_tasks
+
+  flower:
+    build:
+      context: ./subscription-service
+      dockerfile: Dockerfile
+    ports:
+      - "5555:5555"
+    environment:
+      - DATABASE_URL=postgresql://billing_user:billing_pass@postgres:5432/billing_db
+      - REDIS_URL=redis://redis:6379/0
+      - PAYMENT_SERVICE_URL=http://payment-service:8000
+      - ENVIRONMENT=development
+      # Security Configuration
+      - JWT_SECRET_KEY=dev-jwt-secret-key-change-in-production-32-chars-minimum
+      - WEBHOOK_SIGNING_SECRET=dev-webhook-secret-change-in-production-32-chars-minimum
+      - SECRET_KEY=dev-general-secret-change-in-production
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./subscription-service:/app
+    command: celery -A app.workers.celery_app flower --port=5555
+
+volumes:
+  postgres_data:
+  redis_data: 
