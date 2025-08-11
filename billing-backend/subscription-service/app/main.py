@@ -42,31 +42,31 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title=settings.APP_NAME,
     description="""
-    **Subscription Management Service** with JWT Authentication
-    
-    ## Authentication
-    
-    Most endpoints require JWT authentication. To authenticate:
-    
-    1. **Register** a new account: `POST /v1/auth/register`
-    2. **Login** to get a token: `POST /v1/auth/login`
-    3. Click the **🔒 Authorize** button and enter: `Bearer <your_token>`
-    4. Use authenticated endpoints
-    
-    ## Features
-    
-    - 🔐 **JWT Authentication** - Secure user authentication
-    - 📦 **Subscription Management** - Create, manage, and cancel subscriptions
-    - 📊 **Usage Tracking** - Track feature usage with atomic operations
-    - 🔄 **Plan Changes** - Upgrade/downgrade subscription plans
-    - 💳 **Payment Integration** - Integration with payment service
-    - 📈 **Real-time Monitoring** - Redis queues and health checks
-    
-    ## Quick Start
-    
-    1. Register: `POST /v1/auth/register`
-    2. Create subscription: `POST /v1/subscriptions/`
-    3. Track usage: `POST /v1/usage/use`
+        Subscription Management Service with JWT Authentication
+
+        Authentication
+
+        Most endpoints require JWT authentication. To authenticate:
+
+        1. Register a new account: POST /v1/auth/register
+        2. Login to obtain a token: POST /v1/auth/login
+        3. Click the Authorize button and enter: Bearer <your_token>
+        4. Use authenticated endpoints.
+
+        Features
+
+        - JWT Authentication – Secure user authentication.
+        - Subscription Management – Create, manage, and cancel subscriptions.
+        - Usage Tracking – Track feature usage with atomic operations.
+        - Plan Changes – Upgrade or downgrade subscription plans.
+        - Payment Integration – Integration with the payment service.
+        - Real-time Monitoring – Redis queues and health checks.
+
+        Quick Start
+
+        1. Register: POST /v1/auth/register
+        2. Create a subscription: POST /v1/subscriptions/
+        3. Track usage: POST /v1/usage/use
     """,
     version=settings.VERSION,
     docs_url="/docs",
