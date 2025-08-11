@@ -754,7 +754,7 @@ def verify_webhook_signature(request):
 <img width="1228" height="1643" alt="image" src="https://github.com/user-attachments/assets/2cb1ab9d-4898-458f-a4b4-e296c5cb7486" />
 
 
-Also, have included this test runner on shellscript that simulates some scenarios along with edge cases and race condition checks. The runner is under the scripts directory, kindly do check out.
+Also, have included this test runner on shellscript that simulates some scenarios along with edge cases and race condition checks. The runner is billing-backend/scripts/test-runner.sh, kindly do check out.
 ---
 
 ## Containerization & Deployment
