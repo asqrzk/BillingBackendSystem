@@ -751,8 +751,6 @@ def verify_webhook_signature(request):
 - Utility functions and helpers
 - Message processing logic
 
-  <img width="3024" height="1964" alt="image" src="https://github.com/user-attachments/assets/97bcaa37-476c-465c-8dc5-7388a69c7535" />
-
 Also, have included this test runner on shellscript that simulates some scenarios along with edge cases and race condition checks. The runner is under the scripts directory, kindly do check out.
 ---
 
